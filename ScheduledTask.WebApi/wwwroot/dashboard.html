@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScheduledTask Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fa; color: #333; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px 30px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 1.5em; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .status-active { background: #4caf50; } .status-paused { background: #ff9800; }
+        .container { max-width: 1400px; margin: 20px auto; padding: 0 20px; }
+        .stats-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 25px; }
+        .stat-card { background: white; border-radius: 10px; padding: 18px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); text-align: center; }
+        .stat-card .value { font-size: 2em; font-weight: 700; color: #667eea; }
+        .stat-card .label { font-size: 0.85em; color: #888; margin-top: 4px; }
+        .jobs-table { background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); overflow: hidden; }
+        .jobs-table h2 { padding: 16px 20px; border-bottom: 1px solid #eee; font-size: 1.1em; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #fafbfc; padding: 10px 14px; text-align: left; font-size: 0.85em; color: #666; border-bottom: 1px solid #eee; }
+        td { padding: 10px 14px; border-bottom: 1px solid #f0f0f0; font-size: 0.9em; }
+        tr:hover { background: #f8f9ff; }
+        .btn { border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.82em; margin: 0 3px; }
+        .btn-trigger { background: #667eea; color: white; } .btn-trigger:hover { background: #5a6fd6; }
+        .btn-history { background: #f0f0f0; color: #333; } .btn-history:hover { background: #e0e0e0; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; }
+        .badge-success { background: #e8f5e9; color: #2e7d32; } .badge-danger { background: #ffebee; color: #c62828; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
+        .modal-content { background: white; margin: 50px auto; padding: 25px; border-radius: 10px; max-width: 700px; max-height: 80vh; overflow-y: auto; }
+        .modal-close { float: right; font-size: 1.5em; cursor: pointer; }
+        .loading { text-align: center; padding: 40px; color: #888; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>⏰ ScheduledTask Dashboard</h1>
+    <div id="healthStatus">检查中...</div>
+</div>
+<div class="container">
+    <div class="stats-bar" id="statsBar"></div>
+    <div class="jobs-table">
+        <h2>📋 作业列表</h2>
+        <table>
+            <thead><tr>
+                <th>作业名称</th><th>分组</th><th>Cron</th><th>状态</th><th>成功率</th><th>平均耗时</th><th>总执行</th><th>最近执行</th><th>操作</th>
+            </tr></thead>
+            <tbody id="jobsBody"><tr><td colspan="9" class="loading">加载中...</td></tr></tbody>
+        </table>
+    </div>
+</div>
+<div class="modal" id="historyModal">
+    <div class="modal-content">
+        <span class="modal-close" onclick="document.getElementById('historyModal').style.display='none'">&times;</span>
+        <h3>📊 执行历史</h3>
+        <div id="historyContent"></div>
+    </div>
+</div>
+<script>
+const API = '/ManagerController';
+async function load() {
+    await Promise.all([loadStats(), loadHealth(), loadJobs()]);
+}
+async function loadStats() {
+    const res = await fetch(`${API}/GetAllJobStats`).then(r => r.json());
+    const total = res.reduce((s, j) => s + j.totalExecutions, 0);
+    const fails = res.reduce((s, j) => s + j.failureCount, 0);
+    document.getElementById('statsBar').innerHTML = `
+        <div class="stat-card"><div class="value">${res.length}</div><div class="label">作业总数</div></div>
+        <div class="stat-card"><div class="value">${total}</div><div class="label">总执行次数</div></div>
+        <div class="stat-card"><div class="value">${total ? (100 - fails/total*100).toFixed(1) : 0}%</div><div class="label">整体成功率</div></div>
+        <div class="stat-card"><div class="value">${fails}</div><div class="label">失败次数</div></div>`;
+}
+async function loadHealth() {
+    try {
+        const res = await fetch('/health').then(r => r.text());
+        document.getElementById('healthStatus').innerHTML = `<span class="status-dot status-active"></span>${res.includes('Healthy') ? '✅' : '⚠️'} 系统正常`;
+    } catch(e) {
+        document.getElementById('healthStatus').innerHTML = `<span class="status-dot" style="background:#f44336"></span>❌ 系统异常`;
+    }
+}
+async function loadJobs() {
+    const [jobs, stats] = await Promise.all([
+        fetch(`${API}/GetAllJobAsync`).then(r => r.json()),
+        fetch(`${API}/GetAllJobStats`).then(r => r.json())
+    ]);
+    const statMap = {};
+    stats.forEach(s => statMap[s.jobKey] = s);
+    const rows = jobs.map(j => {
+        const s = statMap[j.name] || {};
+        return `<tr>
+            <td><strong>${j.name}</strong></td><td>${j.group}</td>
+            <td>${s.cronExpression || '-'}</td>
+            <td><span class="badge ${s.status === 'Active' ? 'badge-success' : 'badge-danger'}">${s.status || '-'}</span></td>
+            <td>${s.successRate ?? '-'}%</td><td>${s.avgDuration ?? '-'}ms</td><td>${s.totalExecutions ?? 0}</td>
+            <td>${s.lastFireTime ? new Date(s.lastFireTime).toLocaleString() : '-'}</td>
+            <td>
+                <button class="btn btn-trigger" onclick="triggerJob('${j.name}')">触发</button>
+                <button class="btn btn-history" onclick="showHistory('${j.name}')">历史</button>
+            </td></tr>`;
+    }).join('');
+    document.getElementById('jobsBody').innerHTML = rows;
+}
+async function triggerJob(name) {
+    await fetch(`${API}/TriggerJobAsync/${name}`, { method: 'POST' });
+    alert(`作业 ${name} 已触发`);
+}
+async function showHistory(name) {
+    const modal = document.getElementById('historyModal');
+    modal.style.display = 'block';
+    document.getElementById('historyContent').innerHTML = '加载中...';
+    try {
+        const history = await fetch(`${API}/GetTriggerHistory/${name}`).then(r => r.json());
+        document.getElementById('historyContent').innerHTML = history.length === 0 ? '暂无记录' :
+            `<table><thead><tr><th>触发时间</th><th>耗时</th><th>结果</th><th>错误</th></tr></thead><tbody>
+            ${history.map(h => `<tr>
+                <td>${new Date(h.fireTime).toLocaleString()}</td><td>${h.duration}ms</td>
+                <td><span class="badge ${h.success ? 'badge-success' : 'badge-danger'}">${h.success ? '成功' : '失败'}</span></td>
+                <td>${h.errorMessage || '-'}</td></tr>`).join('')}</tbody></table>`;
+    } catch(e) {
+        document.getElementById('historyContent').innerHTML = '加载失败';
+    }
+}
+load();
+</script>
+</body>
+</html>
